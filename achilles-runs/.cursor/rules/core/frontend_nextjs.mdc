@@ -1,0 +1,109 @@
+---
+name: "NextJS Frontend Rules"
+description: "Frontend rules to apply in achilles"
+globs: achilles-runs/src/dashboard/**
+alwaysApply: false
+---
+
+
+```md
+<!-- frontend_nextjs.mdc -->
+
+# Achilles — Frontend (Next.js) Canonical Design
+
+## 1. Purpose & Responsibilities
+
+The Next.js app is the **observability dashboard** for Achilles.
+
+Its responsibilities:
+
+- Visualize sessions, timelines, and event streams.
+- Surface error clusters, correlations, and insights.
+- Show agent performance trends and regression hints.
+- Provide read-only exploration of historical behavior.
+
+It must **not**:
+
+- Manage work (no tasks/PM/boards).
+- Mutate or orchestrate user workflows outside of Achilles’ core observability domain.
+- Serve as a general-purpose engineering portal.
+
+---
+
+## 2. Tech Stack & Conventions
+
+- **Framework**: Next.js 14+ (App Router).
+- **Language**: TypeScript.
+- **Styling**:
+  - Tailwind CSS.
+  - shadcn/ui components for primitives.
+- **Charts**:
+  - `recharts` (or similar) for time-series charts.
+- **Data fetching**:
+  - `fetch` + Next.js server components for primary views.
+  - Optional React Query / TanStack Query for client-side refinements.
+- **Routing**:
+  - App Router (`app/` directory).
+- **State management**:
+  - Keep global state minimal.
+  - Use URL params and query strings as the primary source of truth for filters.
+  - Local component state for transient UI state only.
+
+---
+
+## 3. Project Layout (Canonical)
+
+Within `achilles/dashboard/web`:
+
+```txt
+achilles/dashboard/web/
+  app/
+    layout.tsx
+    page.tsx                 # Default redirect or summary view
+    sessions/
+      page.tsx               # Session list
+      [sessionId]/
+        page.tsx             # Session detail / timeline
+    agents/
+      page.tsx               # Agent performance overview
+      [agentId]/
+        page.tsx             # Agent detail / trends
+    insights/
+      page.tsx               # Recent insights stream
+    api/                     # (optional) Next.js proxy routes for backend if needed
+  components/
+    layout/
+      Shell.tsx
+      Sidebar.tsx
+      Topbar.tsx
+    sessions/
+      SessionListTable.tsx
+      SessionCard.tsx
+      SessionTimeline.tsx
+      EventRow.tsx
+      CompressedBlockRow.tsx
+    agents/
+      AgentTrendChart.tsx
+      AgentSummaryCard.tsx
+    insights/
+      InsightCard.tsx
+      InsightList.tsx
+    common/
+      Badge.tsx
+      Pill.tsx
+      DataTable.tsx
+      EmptyState.tsx
+      ErrorState.tsx
+      LoadingSpinner.tsx
+  lib/
+    api-client.ts            # Typed fetch wrappers
+    types.ts                 # TS types mirroring backend Pydantic models
+    config.ts                # Frontend config (API base URL, feature flags)
+    date.ts                  # Time formatting helpers
+    formatting.ts            # Label & value formatting
+  styles/
+    globals.css
+    tailwind.css
+  public/
+    favicon.ico
+    logo.svg

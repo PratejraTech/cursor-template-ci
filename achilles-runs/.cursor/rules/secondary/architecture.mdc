@@ -1,0 +1,266 @@
+---
+name: "Architecture Rules"
+description: "Rules for developing architecture"
+alwaysApply: false
+---
+## 1. Purpose
+
+Achilles is an MLOps-grade observability and build intelligence system for agentic development workflows.  
+Its focus:
+
+- Listen to signals from IDEs, CI/CD, agents, and developers.
+- Align signals with milestones in the build process.
+- Measure agent and human performance.
+- Cluster errors and correlate events.
+- Expose insights to dashboards and IDEs.
+
+Achilles is **not** a project creation or PM tool.
+
+---
+
+## 2. High-Level System
+
+### 2.1 Services
+
+- **Ingestion & Read API (`achilles_api`)**
+  - FastAPI service.
+  - Ingests events and sessions.
+  - Exposes read endpoints for sessions, timelines, errors, correlations, insights, and agent performance.
+  - Responsible for ordering and basic deduplication.
+
+- **Processing Engine (`achilles_processing`)**
+  - Background worker service.
+  - Tasks:
+    - Milestone inference (rule-based v1).
+    - Noise filtering and compressed views.
+    - Error clustering.
+    - Correlation inference.
+    - Session summaries.
+  - Idempotent, re-runnable jobs.
+
+- **Monitoring Agent (`achilles_agent`)**
+  - LangGraph-based agent system.
+  - Two modes:
+    - **Light**: runs during active sessions, emitting insights and warnings.
+    - **Deep**: runs on session end or on-demand, producing narratives and performance metrics.
+  - Read-only on raw events; writes to insights and agent_performance.
+
+- **Dashboard (`dashboard/web`)**
+  - Next.js app.
+  - Read-only UI for:
+    - Session list.
+    - Session timeline.
+    - Error clusters and correlations.
+    - Agent performance trends.
+    - Recent insights.
+
+- **Adapters (`adapters/*`)**
+  - **MCP Cursor Adapter**: streams Cursor / Claude Code activity into Achilles.
+  - **CLI Tool**: local commands for session start/end, test ingestion, git commit ingestion.
+  - **CI/CD Adapter**: scripts to ingest build/test artifacts from pipelines.
+
+- **Infrastructure (`infra/*`)**
+  - Docker images and local compose.
+  - Kubernetes manifests (or equivalent orchestration).
+  - Terraform modules for cloud infra.
+  - OpenTelemetry wiring and basic metrics.
+
+- **Core & Migrations (`achilles_core`, `achilles_migrations`)**
+  - Core models, schemas, validation, hashing.
+  - Alembic migrations and SQL DDL for Postgres.
+
+---
+
+## 3. Runtime Agent Topology (LangGraph)
+
+### 3.1 Shared Concepts
+
+- **State**: Contains session_id, windowed events, summaries, error clusters, correlations, agent metrics, and configuration.
+- **Tools**: Read-only DB queries and write endpoints for insights and agent_performance.
+
+Key tools:
+
+- `tool_query_session_events(session_id, window=None)`
+- `tool_query_session_errors(session_id)`
+- `tool_query_error_clusters(session_id)`
+- `tool_query_correlations(session_id)`
+- `tool_query_session_summary(session_id)`
+- `tool_write_insight(session_id, insight_payload)`
+- `tool_write_agent_performance(agent_id, session_id, metrics_payload)`
+
+All tools must:
+
+- Be side-effect-free on raw events.
+- Validate inputs and outputs via Pydantic models.
+
+---
+
+### 3.2 Light Monitoring Agent
+
+**Name:** `LightMonitoringAgent`  
+**Trigger:** During active session (e.g., every N events or every 30s), or on-demand via API.
+
+**Goal:** Emit low-latency, actionable insights for the IDE / MCP layer.
+
+**Graph Nodes:**
+
+1. `load_recent_context`
+   - Inputs: `session_id`, optional `time_window`.
+   - Uses:
+     - `tool_query_session_events(session_id, window=time_window)`
+     - `tool_query_session_summary(session_id)`
+   - Outputs: recent events, basic metrics.
+
+2. `detect_hotspots`
+   - Inputs: recent events + summary.
+   - Logic:
+     - High error density over recent window.
+     - Repeated errors in the same file.
+     - Rapid agent/human back-and-forth on a file.
+   - Outputs: list of hotspot candidates.
+
+3. `detect_agent_risk_patterns`
+   - Inputs: hotspots + events.
+   - Logic:
+     - Repeated break-fix loops caused by the same agent.
+     - High override frequency (human quickly undoing agent changes).
+   - Outputs: agent risk findings.
+
+4. `summarize_light_insights`
+   - Inputs: hotspots, agent risk findings.
+   - Outputs: structured insight payloads:
+     - `severity` (low/med/high)
+     - `category` (error_density, agent_regression, churn, etc.)
+     - `message` (short, UI-ready)
+     - `session_id`, `file`, `timestamps`.
+
+5. `persist_insights`
+   - Inputs: insight payloads.
+   - Uses: `tool_write_insight`.
+   - Outputs: none (side-effect: insights table updated).
+
+**Outputs / Side Effects:**
+
+- New rows in `insights` table.
+- Optionally, push notifications to IDE via MCP (handled by adapter, not within LangGraph itself).
+
+---
+
+### 3.3 Deep Monitoring Agent
+
+**Name:** `DeepMonitoringAgent`  
+**Trigger:** On session end, or via explicit API call.
+
+**Goal:** Produce rich narratives and quantitative metrics for the session and agent(s).
+
+**Graph Nodes:**
+
+1. `load_full_session_context`
+   - Inputs: `session_id`.
+   - Uses:
+     - `tool_query_session_events(session_id)`
+     - `tool_query_error_clusters(session_id)`
+     - `tool_query_correlations(session_id)`
+     - `tool_query_session_summary(session_id)`
+   - Outputs: full context.
+
+2. `build_timeline_segments`
+   - Inputs: full events and compressed views.
+   - Logic:
+     - Segment by milestones (coding, testing, debugging, integration).
+     - Mark transition points, errors, and fixes.
+   - Outputs: structured segments.
+
+3. `analyze_agent_vs_human`
+   - Inputs: segments, correlations.
+   - Logic:
+     - Count agent-induced errors.
+     - Measure time-to-fix for agent-induced vs human-induced issues.
+     - Measure override frequency and success rate per agent.
+   - Outputs: metrics per agent and per session.
+
+4. `detect_regressions_and_patterns`
+   - Inputs: agent metrics, historic baselines (optional).
+   - Logic:
+     - If available, compare to historical baselines.
+     - Mark potential regressions in success rate or induced error rate.
+   - Outputs: regression flags and explanatory notes.
+
+5. `compose_session_narrative`
+   - Inputs: segments, metrics, regressions.
+   - Outputs: structured narrative:
+     - `summary`
+     - `timeline_highlights` (key events)
+     - `agent_evaluation` (per agent)
+     - `recommendations` (short bullet list).
+
+6. `persist_agent_performance_and_report`
+   - Inputs: metrics and narrative.
+   - Uses:
+     - `tool_write_agent_performance`
+     - write `session_report` (via dedicated API or DB tool).
+   - Outputs: none.
+
+**Outputs / Side Effects:**
+
+- New rows in `agent_performance`.
+- New record for `session_report` (JSON) linked to the session.
+- Optional additional `insights` entries summarizing the session.
+
+---
+
+### 3.4 Future Agents (Placeholder Hooks)
+
+These are not required for the initial implementation but the architecture reserves space for them:
+
+- `RegressionAnalyticsAgent`
+  - Nightly, multi-session analysis.
+  - Detects regressions in agent success rate and induced error rate.
+
+- `TrendExplainerAgent`
+  - Converts aggregated metrics into executive-ready summaries.
+  - Potentially powers dashboards for engineering leadership.
+
+These agents must follow the same principles: read raw and derived data, write to analytics tables and insights, without mutating canonical event logs.
+
+---
+
+## 4. Service Boundaries & Data Flow
+
+1. **Adapters → Ingestion API**
+   - MCP, CLI, CI/CD send batches of events to `/v1/events/batch`.
+   - Sessions are started/ended via `/v1/sessions/start` and `/v1/sessions/end`.
+
+2. **Ingestion API → DB**
+   - Validates and hashes events.
+   - Applies basic dedupe.
+   - Writes to `events`, `sessions`, `notes` tables.
+
+3. **Processing Engine → DB**
+   - Periodically processes sessions:
+     - Milestones → `milestone_inferences`.
+     - Error clustering → `error_clusters`.
+     - Correlations → `event_correlations`.
+     - Summaries → fields on `sessions` + potentially `session_summaries`.
+
+4. **Monitoring Agent → DB**
+   - Reads processed data + events.
+   - Writes:
+     - `insights`.
+     - `agent_performance`.
+     - `session_report` (JSON).
+
+5. **Dashboard → Read APIs**
+   - Uses `/v1/sessions`, `/v1/sessions/{id}`, `/v1/sessions/{id}/timeline`, `/v1/sessions/{id}/errors`, `/v1/sessions/{id}/correlations`, `/v1/sessions/{id}/agent-performance`, `/v1/insights/recent`, `/v1/agents/{id}/trends`.
+   - Renders observability views, not PM workflows.
+
+---
+
+## 5. Non-Goals (Safeguards)
+
+- No issue tracking or ticketing.
+- No sprint management or backlog organization.
+- No opinionated coding workflow enforcement beyond observability.
+- No direct code modifications by Achilles in user repos; it observes, it does not act.
+
+All design and implementation work must preserve these boundaries.

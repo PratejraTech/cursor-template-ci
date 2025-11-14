@@ -1,0 +1,324 @@
+---
+name: Data Model Canonical Rules
+desscription: Achilles Data Model Files
+alwaysApply: true
+---
+<!-- datamodel.mdc -->
+
+# Achilles — Canonical Data Model
+
+This document defines the core entities, fields, and relationships for Achilles.  
+All SQL DDL, migrations, and Pydantic models must align with this specification.
+
+---
+
+## 1. Core Entities Overview
+
+- `events` — atomic, append-only stream of activity.
+- `sessions` — bounded windows of developer + agent activity.
+- `milestone_inferences` — inferred high-level phases and transitions.
+- `error_clusters` — grouped, normalized error signatures.
+- `event_correlations` — causal/temporal links between events.
+- `agent_performance` — per-session performance metrics by agent.
+- `insights` — structured, IDE/UI-facing observations from the Monitoring Agent.
+- `user_config` — per-user tuning and thresholds.
+- `compressed_event_views` (or equivalent) — precomputed compressed representations for UI.
+
+Each table must:
+
+- Be keyed by a stable primary key (usually ULID/UUID).
+- Include `created_at` and `updated_at` where applicable.
+- Never mutate raw event payloads.
+
+---
+
+## 2. `events`
+
+**Purpose:** Atomic record of activity from humans, agents, IDEs, CI/CD, and tools.
+
+**Table:** `events`
+
+| Field                     | Type                     | Description                                                                 |
+|--------------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                       | UUID (PK)               | Unique identifier for the event.                                           |
+| session_id               | UUID (FK → sessions.id) | Session this event belongs to.                                             |
+| event_type               | TEXT / ENUM             | Logical type: `edit`, `save`, `agent_action`, `test_result`, `build_output`, `git_commit`, `note`, `ide_event`, etc. |
+| source_type              | TEXT / ENUM             | `human`, `agent`, `system`, `ci`, `ide`.                                   |
+| source_name              | TEXT                    | Freeform source identifier (e.g., `cursor`, `claude-code`, `github-actions`). |
+| agent_metadata           | JSONB                   | Optional: `{provider, model, version, params, temperature, top_p, …}`.     |
+| file_path                | TEXT                    | Optional: affected file path.                                              |
+| project_root             | TEXT                    | Optional: normalized project root path.                                    |
+| language                 | TEXT                    | Optional: language or stack (`python`, `typescript`, `go`, etc.).          |
+| payload                  | JSONB                   | Event-specific details (diffs, error messages, test results, etc.).        |
+| raw_message              | TEXT                    | Optional freeform message (e.g., raw log line or error text).              |
+| attribution_source       | TEXT / ENUM             | `mcp_cursor`, `cli`, `ci_adapter`, `other`.                                |
+| attribution_confidence   | FLOAT                   | 0.0–1.0 confidence in source attribution.                                  |
+| client_timestamp         | TIMESTAMP WITH TZ       | Timestamp from the client.                                                 |
+| server_timestamp         | TIMESTAMP WITH TZ       | Timestamp when Achilles received the event.                                |
+| event_hash               | TEXT                    | Hash for dedupe (e.g., stable across retries).                             |
+| metadata                 | JSONB                   | Extra tags (branch, commit id, build id, etc.).                            |
+| created_at               | TIMESTAMP WITH TZ       | Insert time.                                                                |
+
+**Pydantic Model:** `Event`
+
+- Mirrors all fields above.
+- Includes validation for:
+  - Event type enums.
+  - Required vs optional fields depending on event_type.
+  - Consistency between file_path/project_root/metadata.
+
+---
+
+## 3. `sessions`
+
+**Purpose:** Bounded sequence of events for a developer/agent context.
+
+**Table:** `sessions`
+
+| Field                    | Type                     | Description                                                       |
+|-------------------------|--------------------------|-------------------------------------------------------------------|
+| id                      | UUID (PK)               | Session identifier.                                               |
+| external_session_key    | TEXT                    | Client-provided session key (may not be globally unique).         |
+| user_id                 | TEXT                    | Logical user identifier (IDE user, CI job owner, etc.).           |
+| workspace_id            | TEXT                    | Optional workspace/team identifier.                               |
+| start_time              | TIMESTAMP WITH TZ       | Session start time.                                               |
+| end_time                | TIMESTAMP WITH TZ       | Session end time (nullable while active).                         |
+| status                  | TEXT / ENUM             | `active`, `completed`, `abandoned`, `failed`.                     |
+| event_count             | INTEGER                 | Total events in session.                                          |
+| agent_activity_score    | INTEGER                 | Count/score of agent events.                                      |
+| human_activity_score    | INTEGER                 | Count/score of human events.                                      |
+| error_density           | FLOAT                   | Errors per 100 events (or similar).                               |
+| milestone_breakdown     | JSONB                   | `{coding, testing, debugging, integration, reviewing, …}` counts. |
+| tags                    | TEXT[] / JSONB          | Optional tags (branch, epic, environment).                        |
+| config_snapshot         | JSONB                   | Snapshot of relevant user_config at session start.                |
+| created_at              | TIMESTAMP WITH TZ       | Insert time.                                                      |
+| updated_at              | TIMESTAMP WITH TZ       | Last update.                                                      |
+
+**Pydantic Model:** `Session`
+
+- Ensures status validity.
+- Provides computed helpers (e.g., `is_active`, `duration`).
+
+---
+
+## 4. `milestone_inferences`
+
+**Purpose:** Rule- or ML-inferred phases and transitions within a session.
+
+**Table:** `milestone_inferences`
+
+| Field                 | Type                     | Description                                                                 |
+|-----------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                    | UUID (PK)               | Unique identifier.                                                          |
+| session_id            | UUID (FK → sessions.id) | Associated session.                                                         |
+| start_event_id        | UUID (FK → events.id)   | First event in this milestone segment.                                      |
+| end_event_id          | UUID (FK → events.id)   | Last event in this milestone segment.                                       |
+| milestone_type        | TEXT / ENUM             | `coding`, `testing`, `debugging`, `integration`, `reviewing`, `other`.      |
+| confidence            | FLOAT                   | 0.0–1.0 confidence in this inference.                                      |
+| rule_version          | TEXT                    | Version / identifier of rule set or model used.                            |
+| features_snapshot     | JSONB                   | Optional features used in the inference (densities, event types, etc.).    |
+| created_at            | TIMESTAMP WITH TZ       | Insert time.                                                                |
+
+**Pydantic Model:** `MilestoneInference`
+
+- Exposes easy mapping for UI timeline segments.
+
+---
+
+## 5. `error_clusters`
+
+**Purpose:** Group similar errors into clusters for analysis and visualization.
+
+**Table:** `error_clusters`
+
+| Field                    | Type                     | Description                                                                 |
+|-------------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                      | UUID (PK)               | Cluster identifier.                                                         |
+| session_id              | UUID (FK → sessions.id) | Optional; if null, cluster spans multiple sessions.                         |
+| normalized_error        | TEXT                    | Normalized error key (message template without line numbers/paths).         |
+| error_type              | TEXT / ENUM             | `compiler`, `test_failure`, `runtime`, `linter`, `other`.                   |
+| representative_event_id | UUID (FK → events.id)   | Example event representing this cluster.                                    |
+| occurrence_count        | INTEGER                 | Number of events assigned to this cluster.                                  |
+| last_seen_at            | TIMESTAMP WITH TZ       | Most recent occurrence timestamp.                                           |
+| metadata                | JSONB                   | Additional info (files impacted, tests impacted, etc.).                     |
+| created_at              | TIMESTAMP WITH TZ       | Insert time.                                                                |
+| updated_at              | TIMESTAMP WITH TZ       | Last update.                                                                |
+
+**Pydantic Model:** `ErrorCluster`
+
+- Used by processing engine and monitoring agents.
+
+---
+
+## 6. `event_correlations`
+
+**Purpose:** Express probabilistic causal links between events (e.g., “this agent action caused this test failure”).
+
+**Table:** `event_correlations`
+
+| Field                | Type                     | Description                                                                 |
+|----------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                   | UUID (PK)               | Unique identifier.                                                          |
+| session_id           | UUID (FK → sessions.id) | Session in which the correlation occurs.                                    |
+| cause_event_id       | UUID (FK → events.id)   | Candidate cause event (e.g., agent action, human edit).                     |
+| effect_event_id      | UUID (FK → events.id)   | Observed effect event (e.g., error, failing test).                          |
+| correlation_type     | TEXT / ENUM             | `temporal`, `file_proximity`, `heuristic`, later `ml_scored`, etc.         |
+| confidence           | FLOAT                   | 0.0–1.0 confidence score.                                                   |
+| time_delta_ms        | INTEGER                 | Time difference between events (effect - cause).                            |
+| file_match           | BOOLEAN                 | True if both events affect the same file/path.                              |
+| metadata             | JSONB                   | Additional scoring details and features.                                    |
+| created_at           | TIMESTAMP WITH TZ       | Insert time.                                                                |
+
+**Pydantic Model:** `EventCorrelation`
+
+- Used heavily by Monitoring Agent and dashboard.
+
+---
+
+## 7. `agent_performance`
+
+**Purpose:** Quantitative metrics about an agent’s behavior within a session.
+
+**Table:** `agent_performance`
+
+| Field                     | Type                     | Description                                                                 |
+|---------------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                        | UUID (PK)               | Unique record identifier.                                                   |
+| agent_id                  | TEXT                    | Logical agent identifier (e.g., provider+model+version).                    |
+| session_id                | UUID (FK → sessions.id) | Session for which the metrics were computed.                                |
+| total_actions             | INTEGER                 | Number of actions taken by the agent.                                       |
+| successful_actions        | INTEGER                 | Actions that led to a successful outcome.                                   |
+| induced_error_count       | INTEGER                 | Errors likely caused by the agent (based on correlations).                  |
+| override_count            | INTEGER                 | Times a human overrode or reverted the agent’s changes.                     |
+| success_rate              | FLOAT                   | successful_actions / max(1, total_actions).                                 |
+| induced_error_rate        | FLOAT                   | induced_error_count / max(1, total_actions).                                |
+| override_rate             | FLOAT                   | override_count / max(1, total_actions).                                     |
+| regression_flags          | JSONB                   | Optional flags if this session deviates from baseline.                      |
+| metrics_version           | TEXT                    | Version of metrics computation logic.                                       |
+| created_at                | TIMESTAMP WITH TZ       | Insert time.                                                                |
+
+**Pydantic Model:** `AgentPerformanceSnapshot`
+
+- Used by Monitoring Agent and Dashboard for trends.
+
+---
+
+## 8. `insights`
+
+**Purpose:** Structured, UI-ready insights generated by Monitoring Agent (light and deep).
+
+**Table:** `insights`
+
+| Field            | Type                     | Description                                                                 |
+|------------------|--------------------------|-----------------------------------------------------------------------------|
+| id               | UUID (PK)               | Insight identifier.                                                         |
+| session_id       | UUID (FK → sessions.id) | Session this insight is about.                                             |
+| agent_id         | TEXT                    | Optional: agent this insight targets.                                      |
+| severity         | TEXT / ENUM             | `info`, `warning`, `critical`.                                             |
+| category         | TEXT / ENUM             | `error_density`, `agent_regression`, `churn`, `loop`, `meta`, etc.        |
+| title            | TEXT                    | Short human-readable title.                                                |
+| message          | TEXT                    | Detailed human-readable description.                                       |
+| payload          | JSONB                   | Structured data for UI (files, events, metrics, links).                    |
+| created_at       | TIMESTAMP WITH TZ       | Insert time.                                                                |
+
+**Pydantic Model:** `Insight`
+
+- Used by IDE integrations and dashboard.
+
+---
+
+## 9. `user_config`
+
+**Purpose:** Per-user or per-workspace tuning for thresholds and feature toggles.
+
+**Table:** `user_config`
+
+| Field              | Type                     | Description                                                                 |
+|--------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                 | UUID (PK)               | Identifier.                                                                 |
+| user_id            | TEXT                    | Logical user identifier.                                                   |
+| workspace_id       | TEXT                    | Optional workspace/team identifier.                                        |
+| config             | JSONB                   | Config payload (thresholds, enabled features, etc.).                       |
+| created_at         | TIMESTAMP WITH TZ       | Insert time.                                                                |
+| updated_at         | TIMESTAMP WITH TZ       | Last update.                                                                |
+
+**Pydantic Model:** `UserConfig`
+
+- Snapshotted into `sessions.config_snapshot` at session start.
+
+---
+
+## 10. `compressed_event_views` (or Materialized View)
+
+**Purpose:** UI-focused compressed representation of noisy event streams.
+
+Name is flexible (could be `compressed_events`, `event_blocks`, or a materialized view), but semantics should be:
+
+| Field                | Type                     | Description                                                                 |
+|----------------------|--------------------------|-----------------------------------------------------------------------------|
+| id                   | UUID (PK)               | Block identifier.                                                           |
+| session_id           | UUID (FK → sessions.id) | Session.                                                                    |
+| block_type           | TEXT / ENUM             | `EDIT_BLOCK`, `AGENT_LOOP`, `TEST_RUN`, `CI_BLOCK`, etc.                    |
+| start_event_id       | UUID (FK → events.id)   | First event in block.                                                       |
+| end_event_id         | UUID (FK → events.id)   | Last event in block.                                                        |
+| start_time           | TIMESTAMP WITH TZ       | Start time.                                                                 |
+| end_time             | TIMESTAMP WITH TZ       | End time.                                                                   |
+| representative_event | UUID (FK → events.id)   | Representative event.                                                       |
+| summary              | TEXT                    | Short description for UI.                                                   |
+| metadata             | JSONB                   | Additional info (file list, counts, etc.).                                  |
+
+**Pydantic Model:** `CompressedEventBlock`
+
+- Only used for read-heavy dashboard and agent context.
+
+---
+
+## 11. Relationships Summary
+
+- `sessions` 1–N `events`
+- `sessions` 1–N `milestone_inferences`
+- `sessions` 1–N `error_clusters`
+- `sessions` 1–N `event_correlations`
+- `sessions` 1–N `insights`
+- `sessions` 1–N `agent_performance` (per agent)
+- `events` may be referenced by:
+  - `milestone_inferences` (start/end)
+  - `error_clusters` (representative_event_id)
+  - `event_correlations` (cause_event_id/effect_event_id)
+  - `compressed_event_views` (start/end/representative_event)
+- `user_config` linked logically to sessions via `user_id` and `workspace_id` and snapshotted in `sessions.config_snapshot`.
+
+---
+
+## 12. Validation & Hashing Library
+
+All ingestion paths MUST use functions from `achilles_core.validation`:
+
+- `validate_event(event: Event) -> Event`
+  - Enforces enum values, required fields by event_type, and normalizes paths.
+- `compute_event_hash(event: Event) -> str`
+  - Produces stable hash based on stable fields:
+    - (session_id, event_type, source_type, file_path, raw_message, payload subset, client_timestamp).
+- `validate_session(session: Session) -> Session`
+  - Ensures start/end ordering, basic invariants.
+
+These functions are the single source of truth for dedupe and data quality.
+
+---
+
+## 13. Mapping to Requirements (Example)
+
+A full mapping should live in `docs/TRACEABILITY.md`. At minimum:
+
+- **R-01: Always keep raw events** → `events` table (append-only, no destructive updates).
+- **R-02: Re-inference friendly** → `events` + `milestone_inferences` (idempotent recompute).
+- **R-05: Milestone inference** → `milestone_inferences`, `sessions.milestone_breakdown`.
+- **R-06: Noise filtering / compression** → `compressed_event_views`.
+- **R-07: Error clustering** → `error_clusters`.
+- **R-08: Correlations** → `event_correlations`.
+- **R-09, R-12: Regressions & trends** → `agent_performance`, aggregated analytics later.
+- **R-10: Observable timelines** → `events`, `compressed_event_views`, `insights`.
+
+All future changes to models must update both this document and TRACEABILITY.
+
+---

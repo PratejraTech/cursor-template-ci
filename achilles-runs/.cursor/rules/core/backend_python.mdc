@@ -1,0 +1,92 @@
+---
+name: "Python Backend Rules"
+description: "Rules to apply to the backend build
+alwaysApply: true
+---
+<!-- backend_python.mdc -->
+
+# Achilles — Backend (Python) Canonical Design
+
+## 1. Purpose & Responsibilities
+
+The Python backend is the **single canonical source** for:
+
+- Event & session ingestion.
+- Persistence of raw signals and all derived overlays (milestones, clusters, correlations, performance, insights).
+- Background processing (rule-based inference, compression, correlation, summaries).
+- Monitoring Agent (LangGraph) orchestration and DB access tools.
+- Typed, versioned read APIs for the dashboard and any external consumers.
+
+It must remain:
+
+- **Data-first** — schemas and contracts drive the design.
+- **Re-inference-friendly** — safe to re-run processing and agents.
+- **Observable** — richly instrumented with logs, metrics, and traces.
+
+It must **not**:
+
+- Implement PM workflows (tickets, boards, sprints).
+- Mutate user codebases or repositories.
+- Depend on front-end or design concerns.
+
+---
+
+## 2. Tech Stack & Versions
+
+- **Language**: Python 3.11+
+- **Framework**: FastAPI
+- **ORM / DB access**:
+  - SQLAlchemy 2.x (preferred) or SQLModel wrapper.
+  - Direct SQL for hot paths allowed if well-encapsulated.
+- **DB**: PostgreSQL 14+ (primary), Redis (cache / queues), Kafka optional later.
+- **Background jobs**:
+  - Phase 1: internal job runner / simple task loop.
+  - Phase 2+: RQ / Dramatiq / Celery acceptable, but isolated behind a service interface.
+- **Monitoring Agent**: LangGraph (Python).
+- **Schema & models**: Pydantic v2 (strict mode where reasonable).
+- **Migrations**: Alembic.
+
+All persistent models and Pydantic types follow `datamodel.mdc`.
+
+---
+
+## 3. Backend Layout (Canonical)
+
+Within `achilles/backend`:
+
+```txt
+achilles/backend/
+  achilles_core/
+    models/           # Pydantic models matching datamodel.mdc
+    db/               # SQLAlchemy models, session factory, base classes
+    validation/       # validate_event, compute_event_hash, etc.
+    config/           # settings schema + loading
+    logging/          # log setup, structured logging helpers
+    tracing/          # OpenTelemetry setup
+    utils/            # generic utilities (time, ids, etc.)
+  achilles_api/
+    main.py           # app factory, router registration
+    routers/          # FastAPI routers grouped by domain (events, sessions, agents, insights)
+    deps/             # dependency injection wiring (db session, config, etc.)
+    schemas/          # API-facing request/response Pydantic models (thin wrappers)
+    services/         # application services orchestrating DB + processing calls
+    middleware/       # tracing, auth, error handling
+  achilles_processing/
+    workers/          # entrypoints for workers
+    jobs/             # job definitions (per session, per batch, nightly)
+    milestones/       # milestone inference logic
+    noise/            # compression and noise filtering
+    clustering/       # error clustering logic
+    correlations/     # correlation engine logic
+    summaries/        # session summary computation
+    scheduler/        # polling or queue consumer loop
+  achilles_agent/
+    graphs/           # LangGraph graphs (LightMonitoringAgent, DeepMonitoringAgent)
+    nodes/            # node implementations (load context, analyze, summarize, persist)
+    tools/            # DB & API tools exposed to LangGraph
+    prompts/          # system and node prompts
+    config/           # agent-specific configuration
+  achilles_migrations/
+    alembic.ini
+    env.py
+    versions/         # migration files

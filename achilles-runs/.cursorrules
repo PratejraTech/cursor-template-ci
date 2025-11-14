@@ -1,0 +1,224 @@
+{
+    "schemaVersion": 1,
+    "description": "Cursor rules for the Achilles observability + build intelligence system.",
+    "project": {
+      "name": "Achilles",
+      "goal": "MLOps-grade observability and build intelligence for agentic development workflows. Focus on listening to signals, aligning them to milestones, measuring agent/human performance, clustering errors, and exposing insights. NOT a PM or project creation tool.",
+      "techStack": {
+        "backend": "Python 3.11+, FastAPI, SQLAlchemy/SQLModel or raw SQL + Pydantic",
+        "db": "Postgres (primary), Redis (cache), Kafka (optional later)",
+        "monitoringAgent": "Python + LangGraph",
+        "dashboard": "Next.js",
+        "tracing": "OpenTelemetry + optional LangSmith for Achilles’ own agents"
+      },
+      "monorepoLayout": [
+        "achilles/backend/achilles_api",
+        "achilles/backend/achilles_core",
+        "achilles/backend/achilles_processing",
+        "achilles/backend/achilles_agent",
+        "achilles/backend/achilles_migrations",
+        "achilles/adapters/*",
+        "achilles/dashboard/web",
+        "achilles/infra/*",
+        "achilles/docs/*"
+      ]
+    },
+  
+    "globalRules": [
+      "Always treat Achilles as an observability + analysis product, not as a project manager or requirement tracker. Do not introduce PM features (boards, tickets, sprints, task assignment, etc.).",
+      "Data models and contracts are sacred. Do not change SQL schemas, Pydantic models, or public API contracts casually. If a change is required, propose it explicitly in comments and keep it consistent across: SQL DDL, migrations, Pydantic models, and docs/datamodel.mdc.",
+      "Raw events are the source of truth. All summaries, clusters, correlations, and milestone inferences must be derived overlays, never replacements.",
+      "Prefer small, vertical slices that go end-to-end (ingest → process → agent analysis → API → dashboard). Avoid half-implemented features that don’t connect front to back.",
+      "Prefer simple, deterministic heuristics first. Only introduce ML when the heuristic baseline is stable and observable.",
+      "Never leak secrets or credentials. Use environment variables and configuration files, not hard-coded keys.",
+      "When in doubt, read docs/ARCHITECTURE.md, docs/TRACEABILITY.md, architecture.mdc, and datamodel.mdc before modifying core logic."
+    ],
+  
+    "directoryModes": [
+      {
+        "pattern": "backend/achilles_core/**",
+        "mode": "core_models_and_contracts"
+      },
+      {
+        "pattern": "backend/achilles_api/**",
+        "mode": "ingestion_and_read_api"
+      },
+      {
+        "pattern": "backend/achilles_processing/**",
+        "mode": "processing_engine"
+      },
+      {
+        "pattern": "backend/achilles_agent/**",
+        "mode": "monitoring_agent"
+      },
+      {
+        "pattern": "backend/achilles_migrations/**",
+        "mode": "db_migrations"
+      },
+      {
+        "pattern": "adapters/**",
+        "mode": "adapters"
+      },
+      {
+        "pattern": "dashboard/web/**",
+        "mode": "dashboard"
+      },
+      {
+        "pattern": "infra/**",
+        "mode": "infra"
+      },
+      {
+        "pattern": "docs/**",
+        "mode": "docs"
+      }
+    ],
+  
+    "modes": [
+      {
+        "name": "core_models_and_contracts",
+        "description": "Pydantic models, core types, validation and hashing logic for Achilles.",
+        "rules": [
+          "Treat datamodel.mdc as canonical for entities and relationships. Keep Pydantic models aligned with the documented schemas.",
+          "Adding or changing a field requires updating: Pydantic model, SQL schema/migration, docs (datamodel.mdc, TRACEABILITY.md), and any validation/serialization logic.",
+          "Keep models minimal but explicit: no magical implicit behavior in __init__ or property setters.",
+          "Provide pure, side-effect-free helpers for validation and hashing (e.g. validate_event, compute_event_hash).",
+          "Use precise types and enums where appropriate (e.g., event_type, source_type, agent_provider).",
+          "Do not import HTTP frameworks (FastAPI) or heavy dependencies here; this layer should be reusable by any service."
+        ]
+      },
+  
+      {
+        "name": "ingestion_and_read_api",
+        "description": "Ingestion and read APIs for events, sessions, errors, correlations, and performance.",
+        "rules": [
+          "Use FastAPI with typed request/response models based on achilles_core Pydantic models.",
+          "Never perform complex business logic in route handlers. Delegate to services/use-cases in separate modules.",
+          "For ingestion, always validate incoming payloads using achilles_core.validation before persisting.",
+          "Implement deduplication exactly as specified: hash + (session_id, timestamp) window; keep it simple and configurable.",
+          "Respect ordering semantics: store and query with timestamps; never reorder in ways that break causality.",
+          "Read endpoints MUST be read-only. No hidden writes or side effects.",
+          "Keep endpoints focused on observability (sessions, timelines, error clusters, correlations, agent performance, insights). Do not add generic CRUD features unrelated to observability.",
+          "Instrument all handlers with OpenTelemetry spans, with meaningful names (e.g., api.events.batch_ingest, api.sessions.timeline)."
+        ]
+      },
+  
+      {
+        "name": "processing_engine",
+        "description": "Background workers for milestone inference, noise filtering, error clustering, correlations, and summaries.",
+        "rules": [
+          "Implement processing as idempotent jobs: re-running a job for a session must not corrupt data.",
+          "Keep processing deterministic given the same inputs. Avoid random seeds or non-deterministic external calls unless explicitly required.",
+          "Milestone inference v1 must be purely rule-based and transparent. Encode the rules clearly and keep them easy to refine.",
+          "Error clustering v1 should use simple normalization + regex grouping. Do not introduce embeddings or external ML in v1.",
+          "Correlation engine v1 should rely on temporal proximity and file/path matching. Keep scoring functions explicit and explainable.",
+          "Write all results to dedicated tables (milestone_inferences, error_clusters, event_correlations, sessions summaries). Do not overwrite raw events.",
+          "Include detailed logging at job boundaries: when processing starts, number of events, number of milestones inferred, clusters formed, correlations computed.",
+          "Ensure each processing module has unit tests and synthetic fixtures representing realistic sessions (agent refactor, failing tests, human overrides, etc.)."
+        ]
+      },
+  
+      {
+        "name": "monitoring_agent",
+        "description": "LangGraph-based Monitoring Agent (light + deep modes) for analysis and narrative summaries.",
+        "rules": [
+          "Use LangGraph primitives (nodes, edges, state) to structure the Monitoring Agent. Keep nodes small and composable (e.g., load_session_context, analyze_agent_behavior, detect_regressions, summarize_findings).",
+          "Light mode runs during an active session. It should query only the minimum data required (recent events, error clusters for that session) and emit short, actionable insights.",
+          "Deep mode runs on session end or on-demand. It can afford more expensive queries and summarization to build session narratives and agent performance metrics.",
+          "Monitoring Agent must be read-only with respect to raw events. It may write to insights, agent_performance, and session_report tables.",
+          "Favor structured output (JSON objects) over free-form text; summaries should be machine-consumable and UI-friendly.",
+          "Keep agent prompts, system instructions, and graph topology documented in architecture.mdc. Update that file when changing the agent graph.",
+          "Wrap DB interactions in explicit tools (e.g., query_session_events, query_error_clusters, write_agent_performance). Do not embed SQL directly in prompt strings."
+        ]
+      },
+  
+      {
+        "name": "db_migrations",
+        "description": "Alembic migrations and SQL DDL.",
+        "rules": [
+          "All schema changes must go through migrations. Never directly alter the DB in ad-hoc ways.",
+          "Migrations must be reversible where possible and safe for production.",
+          "Keep naming consistent: table names, column names, and indices must match datamodel.mdc and Pydantic models.",
+          "Add indices for common query patterns: events by session_id + timestamp, error_clusters by normalized_error, event_correlations by session_id.",
+          "Document any non-obvious performance decisions (partitioning, materialized views) in comments and docs/TRACEABILITY.md."
+        ]
+      },
+  
+      {
+        "name": "adapters",
+        "description": "MCP Cursor adapter, CLI, CI/CD ingestion scripts, and other signal sources.",
+        "rules": [
+          "Adapters must be thin and stateless. Their job is to map external events into Achilles Event payloads and call the ingestion API.",
+          "Never implement business logic in adapters. They should not cluster, correlate, or infer milestones.",
+          "Include agent_metadata (provider, model, temperature, top_p, etc.) whenever available.",
+          "Include source_attribution and attribution_confidence fields when possible (e.g., agent vs human, IDE vs CI).",
+          "For the MCP Cursor adapter, ensure events contain file paths, project root, language, and any relevant Cursor context.",
+          "CLI commands (e.g., achilles session start/end, achilles ingest tests, achilles ingest git) should log clearly what they send and be safe to run locally.",
+          "Where possible, support dry-run modes and local logging for debugging ingestion issues."
+        ]
+      },
+  
+      {
+        "name": "dashboard",
+        "description": "Next.js observability dashboard.",
+        "rules": [
+          "The dashboard is an observability and exploration tool only. Do not add task management, kanban boards, or requirement authoring.",
+          "Focus on a small, powerful set of views: Session List, Session Detail/Timeline, Agent Performance, Insights.",
+          "Respect the backend pagination and filtering semantics. Do not fetch unbounded data.",
+          "Build the timeline as time-ordered, color-coded events with clear indicators for errors, insights, and milestone transitions.",
+          "Allow toggling between compressed views (EDIT_BLOCK, AGENT_LOOP) and raw events for debugging.",
+          "Visualize agent performance trends with simple, legible charts (e.g., success rate, override frequency, induced error rate).",
+          "Use environment-based configuration for API endpoints and feature flags.",
+          "Keep UI components reusable and documented; avoid UI lock-in to this specific product branding if not required."
+        ]
+      },
+  
+      {
+        "name": "infra",
+        "description": "Docker, Kubernetes, Terraform, CI config, and deployment scripts.",
+        "rules": [
+          "Keep services separated: API, processing worker, monitoring agent, dashboard, and DB/Redis should be modeled as distinct services.",
+          "Enable OpenTelemetry tracing and basic metrics (latency, error rates, throughput) from day one.",
+          "Prefer secure defaults: no open Postgres, require auth for APIs, minimal privileges for each service.",
+          "Document environment variables, ports, and dependencies in docs/ARCHITECTURE.md and infra READMEs.",
+          "Support local development via Docker Compose or equivalent, mirroring production topology as closely as feasible."
+        ]
+      },
+  
+      {
+        "name": "docs",
+        "description": "Architecture, traceability, requirements, and MDC design docs.",
+        "rules": [
+          "Update architecture.mdc and datamodel.mdc whenever you significantly change agents, data models, or core flows.",
+          "Keep TRACEABILITY.md in sync with schemas: each requirement (R-xx) should map clearly to tables, fields, or processes.",
+          "Use docs to describe intent and constraints, not to duplicate code. When code and docs conflict, code should be updated to match the agreed design, or the design must be revised.",
+          "Prefer concise, high-signal documentation over verbose but vague descriptions."
+        ]
+      }
+    ],
+  
+    "editingPreferences": {
+      "style": {
+        "language": "clear and direct",
+        "comments": "Explain non-trivial logic, especially around heuristics, clustering, and correlations.",
+        "docstrings": "Use docstrings on all public functions and classes, documenting inputs, outputs, side effects, and invariants."
+      },
+      "tests": {
+        "requireTestsFor": [
+          "core models & validation",
+          "milestone inference rules",
+          "error clustering logic",
+          "correlation scoring",
+          "Monitoring Agent graph nodes"
+        ],
+        "testingFramework": "pytest"
+      },
+      "llmCollaboration": {
+        "cursorBehavior": [
+          "When asked to implement features, always consider the impact on data models, processing, and observability.",
+          "Prefer refactoring existing code to match architectural patterns over adding one-off hacks.",
+          "If a request conflicts with Achilles’ core purpose (e.g., turning it into a PM tool), propose an alternative that preserves the observability focus."
+        ]
+      }
+    }
+  }
+  
