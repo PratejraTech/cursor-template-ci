@@ -1,0 +1,51 @@
+---
+alwaysApply: true
+---
+# ACHILLES — PROJECT STATE
+
+# This file is the single source of truth for high-level project status.
+# It is written to be read by both humans and agents (Cursor 2.0, Claude Code, GPT, etc.).
+# Status values: not_started | in_progress | done | blocked
+
+project_name: "Achilles"
+version: "mvp-0.1"
+last_updated: "YYYY-MM-DDTHH:MM:SSZ"
+
+phases:
+  backend_mvp:
+    status: not_started
+    target: "MVP backend with ingestion, processing, and monitoring agent"
+    notes: |
+      Four-phase backend build:
+      1) Data foundations
+      2) Ingestion API
+      3) Processing engine (clusters + correlations + summary)
+      4) Monitoring agent + essential read APIs
+
+  frontend_mvp:
+    status: not_started
+    target: "Observability dashboard (Next.js) consuming backend APIs"
+    notes: |
+      Not required for initial backend MVP.
+      Only starts once backend_mvp reaches 'in_progress' phase 3.
+
+  adapters_mvp:
+    status: not_started
+    target: "Minimal CLI + MCP adapter for real event streams"
+    notes: |
+      At least a CLI client must exist by backend phase 2.
+      MCP Cursor adapter can come later, after API is stable.
+
+  infra_mvp:
+    status: not_started
+    target: "Docker + basic local run (API, worker, agent, Postgres)"
+    notes: |
+      For MVP, docker-compose with 3 services + Postgres is enough.
+
+# The current_focus key tells agents where to concentrate effort.
+current_focus:
+  area: "backend_mvp"
+  phase: "1_data_foundations"
+  comment: "Do not start ingestion or processing until data models and migrations are stable."
+
+# When upgrading phases, update both status and current_focus.

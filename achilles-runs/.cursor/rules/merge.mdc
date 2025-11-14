@@ -1,0 +1,32 @@
+---
+description: Use when integrating front and back end
+alwaysApply: false
+---
+# @agent MergeAgent
+
+## Purpose
+The merge system is **read-only** and performs intelligence analysis:
+- endpoint mapping
+- schema diffs
+- directory scanning
+- type mismatches
+- “breaking change” detection
+
+## Permissions (@rules)
+- Never modify backend or frontend code
+- Never write outside of /merge/logs or /merge/reports
+- Never fix issues automatically; report only
+
+## Output Rules
+- Logs must include:
+  - Timestamp
+  - File path
+  - Context summary
+  - Diff / mismatch report
+
+## Behavior
+- Build a matrix of:
+  - backend endpoints
+  - frontend API calls
+  - missing routes
+  - schema inconsistencies

@@ -1,0 +1,421 @@
+---
+description: Update state at each phase of backend build.
+alwaysApply: false
+---
+Here’s a concrete spec for a `tools/update_state.py` script that agents and CI can use to keep your `.mdc` state files in sync.
+
+I’ll keep it implementation-ready, but not full code.
+
+---
+
+Name and Location
+
+- Script name: `update_state.py`
+    
+- Location: `tools/update_state.py`
+    
+- Language: Python 3.11
+    
+- Execution: `python -m tools.update_state ...` or `python tools/update_state.py ...`
+    
+
+Primary Purpose
+
+- Provide a **single, safe way** to update:
+    
+    - `state/project_state.mdc`
+        
+    - `state/backend_state.mdc`
+        
+    - (optionally later) `state/frontend_state.mdc`, `state/adapters_state.mdc`
+        
+- Intended to be used by:
+    
+    - CI pipelines (after tests pass)
+        
+    - Local dev automation
+        
+    - Agents (Cursor, etc.) via shell commands
+        
+
+Non-goals
+
+- Not a general YAML editor.
+    
+- Not a task scheduler.
+    
+- Does not infer state from git history or commit messages.
+    
+- Does not run tests; it only reacts to inputs (flags / JSON summary / exit codes).
+    
+
+---
+
+File Format Assumption
+
+All `.mdc` state files follow a **“YAML with comments + markdown headings”** pattern:
+
+- Lines starting with `#` are comments / headings.
+    
+- The first YAML object starts after the first non-comment line that looks like a key: value.
+    
+- Structure is stable and known.
+    
+
+The script:
+
+- Ignores markdown headings / comments.
+    
+- Parses the YAML structure underneath.
+    
+- Writes back the file, preserving:
+    
+    - Top comments and headings.
+        
+    - Key ordering (as much as the YAML lib allows).
+        
+    - Only changing the relevant `status`, `current_phase`, `current_focus`, or `tasks` entries.
+        
+
+Recommendation: use `ruamel.yaml` (for comment/ordering friendly behavior), but spec does not force it.
+
+---
+
+High-Level Responsibilities
+
+1. Update phase status (backend or project-level)
+    
+2. Update task status (backend per-task level)
+    
+3. Update current focus / current phase
+    
+4. Optionally, advance phases based on a “test result summary” JSON
+    
+
+---
+
+CLI Interface
+
+Script is a single entrypoint with subcommands.
+
+Base invocation:
+
+- `python tools/update_state.py <command> [options]`
+    
+
+Commands:
+
+1. `set-phase-status`
+    
+2. `set-task-status`
+    
+3. `set-current-phase` (backend state)
+    
+4. `set-current-focus` (project state)
+    
+5. `auto-update-from-ci` (optional, later)
+    
+
+Each command has required and optional flags.
+
+---
+
+Command: set-phase-status
+
+Purpose:
+
+- Change the `status` field for a specific phase in `backend_state.mdc` or `project_state.mdc`.
+    
+
+Usage:
+
+- `python tools/update_state.py set-phase-status --file state/backend_state.mdc --phase phase_1_data_foundations --status in_progress`
+    
+- `python tools/update_state.py set-phase-status --file state/project_state.mdc --phase backend_mvp --status done`
+    
+
+Arguments:
+
+- `--file` (required): path to `.mdc` file.
+    
+- `--phase` (required): phase key (e.g., `phase_1_data_foundations`, `backend_mvp`).
+    
+- `--status` (required): one of `not_started`, `in_progress`, `done`, `blocked`.
+    
+
+Behavior:
+
+- Parse file.
+    
+- Find `backend.phase_1_data_foundations.status` or `phases.backend_mvp.status` depending on structure:
+    
+    - If file contains `backend:`, treat `phase` as backend.phase_*.
+        
+    - If file contains `phases:`, treat `phase` as phases.<phase_id>.
+        
+- Update the `status` field to the new value.
+    
+- Do not modify other phases or tasks.
+    
+- Save file preserving comments/headings.
+    
+
+Validation:
+
+- If phase not found → exit with non-zero code, print error.
+    
+- If status not in allowed set → exit with non-zero.
+    
+
+---
+
+Command: set-task-status
+
+Purpose:
+
+- Change an individual task’s status under a specific phase in `backend_state.mdc`.
+    
+
+Usage:
+
+- `python tools/update_state.py set-task-status --file state/backend_state.mdc --phase phase_1_data_foundations --task-id p1-01 --status done`
+    
+
+Arguments:
+
+- `--file` (required): must be `state/backend_state.mdc` (for now).
+    
+- `--phase` (required): e.g., `phase_1_data_foundations`.
+    
+- `--task-id` (required): task id (e.g., `p1-01`).
+    
+- `--status` (required): `not_started`, `in_progress`, `done`, `blocked`.
+    
+
+Behavior:
+
+- Parse backend_state.
+    
+- Locate `backend.phase_1_data_foundations.tasks`.
+    
+- Find the task whose `id` equals `task-id`.
+    
+- Update its `status`.
+    
+- Optionally, if all tasks under that phase are `done`, script may:
+    
+    - Print a message: `All tasks in phase_1_data_foundations are done; consider setting the phase status to 'done'.`
+        
+    - But does NOT automatically change phase status (MVP).
+        
+
+Validation:
+
+- If phase or task not found → exit with error.
+    
+- If invalid status → error.
+    
+
+---
+
+Command: set-current-phase
+
+Purpose:
+
+- Change the `current_phase` field in `backend_state.mdc`.
+    
+
+Usage:
+
+- `python tools/update_state.py set-current-phase --file state/backend_state.mdc --phase phase_2_ingestion_api --comment "Start implementing FastAPI ingestion"`
+    
+
+Arguments:
+
+- `--file` (required): `state/backend_state.mdc`.
+    
+- `--phase` (required): must match a `backend.<phase_*>` key.
+    
+- `--comment` (optional): free text to set as `current_phase.comment`.
+    
+
+Behavior:
+
+- Parse backend_state.
+    
+- Confirm that `backend.<phase>` exists.
+    
+- Update:
+    
+    - `current_phase.id` to the given phase id.
+        
+    - `current_phase.comment` if provided.
+        
+
+Validation:
+
+- If phase does not exist → error.
+    
+- If comment too long (optional limit) → warn, but accept.
+    
+
+---
+
+Command: set-current-focus
+
+Purpose:
+
+- Change the `current_focus` in `project_state.mdc`.
+    
+
+Usage:
+
+- `python tools/update_state.py set-current-focus --file state/project_state.mdc --area backend_mvp --phase 2_ingestion_api --comment "Backend: build ingestion endpoints"`
+    
+
+Arguments:
+
+- `--file` (required): `state/project_state.mdc`.
+    
+- `--area` (required): e.g., `backend_mvp`, `frontend_mvp`.
+    
+- `--phase` (required): free-form string but recommended to match a backend/frontend phase id.
+    
+- `--comment` (optional): free text summary of the focus.
+    
+
+Behavior:
+
+- Parse project_state.
+    
+- Confirm that `phases.<area>` exists.
+    
+- Update:
+    
+    - `current_focus.area`
+        
+    - `current_focus.phase`
+        
+    - `current_focus.comment` (if provided).
+        
+
+---
+
+Command: auto-update-from-ci (optional, but useful)
+
+Purpose:
+
+- Allow CI to update state files based on a small JSON summary produced by tests or checks.
+    
+
+Usage:
+
+- `python tools/update_state.py auto-update-from-ci --summary ci_state.json`
+    
+
+Example JSON:
+
+```json
+{
+  "backend_phase": "phase_1_data_foundations",
+  "backend_phase_status": "done",
+  "backend_tasks_done": ["p1-01", "p1-02", "p1-03", "p1-04", "p1-05"],
+  "project_focus_area": "backend_mvp",
+  "project_focus_phase": "phase_2_ingestion_api",
+  "project_focus_comment": "Backend data foundations complete; starting ingestion API."
+}
+```
+
+Arguments:
+
+- `--summary` (required): path to JSON file.
+    
+- Optional flags:
+    
+    - `--backend-file` default `state/backend_state.mdc`
+        
+    - `--project-file` default `state/project_state.mdc`
+        
+
+Behavior:
+
+- Read summary JSON.
+    
+- For each known key:
+    
+    - Update backend phase status.
+        
+    - Update backend tasks statuses to `done` where listed.
+        
+    - Update project current_focus.
+        
+- If unknown keys are present, ignore them with a warning.
+    
+
+Validation:
+
+- If JSON parse fails → error.
+    
+- If fields refer to non-existent phases/tasks → warn and skip.
+    
+
+---
+
+Internal Structure and Functions
+
+Key internal functions (rough spec):
+
+- `load_state_file(path: str) -> (metadata_comments: list[str], yaml_data: dict)`
+    
+    - Reads file, splits comment/header lines from YAML body.
+        
+    - Returns both pieces.
+        
+- `dump_state_file(path: str, metadata_comments: list[str], yaml_data: dict) -> None`
+    
+    - Writes comments/headings first, then YAML-serialized data.
+        
+- `update_backend_phase_status(yaml_data: dict, phase_id: str, status: str) -> None`
+    
+    - Locates `yaml_data["backend"][phase_id]["status"]` and sets it.
+        
+- `update_backend_task_status(yaml_data: dict, phase_id: str, task_id: str, status: str) -> None`
+    
+- `update_backend_current_phase(yaml_data: dict, phase_id: str, comment: Optional[str]) -> None`
+    
+- `update_project_current_focus(yaml_data: dict, area: str, phase: str, comment: Optional[str]) -> None`
+    
+- `validate_status(status: str) -> None`
+    
+    - Ensures status in allowed set.
+        
+
+Logging / Output
+
+- On success:
+    
+    - Print short message: e.g., `Updated state/backend_state.mdc: phase_1_data_foundations.status = done`
+        
+- On error:
+    
+    - Print clear error message and exit with non-zero code.
+        
+- No noisy debug logs by default; can add `--verbose` flag later.
+    
+
+Safety Considerations
+
+- Script should fail fast if structure deviates from expected pattern (to avoid silently corrupting files).
+    
+- Never remove keys; only update scalar fields like `status`, `id`, `comment`.
+    
+- Always write to a temp file first, then atomically replace original (to avoid partial writes).
+    
+
+---
+
+If you’d like, next I can:
+
+- Turn this spec into a concrete Python implementation of `tools/update_state.py`, or
+    
+- Extend the spec for a `state/frontend_state.mdc` and CI workflow that calls this script after each stage.

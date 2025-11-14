@@ -1,0 +1,33 @@
+---
+name: Testing Rules Cursor
+description: Developing tests and executing runs
+alwaysApply: false
+---
+# @tests
+
+## Global Testing Philosophy
+- Tests should be deterministic
+- Avoid shared state
+- Avoid real network
+- Prefer small, focused tests
+
+## Backend Tests
+- pytest tests are required for API, models, LangGraph nodes
+- Include both:
+  - unit tests
+  - integration graph tests
+
+## Frontend Tests
+- vitest/jest with React Testing Library
+- Tests focus on:
+  - user-visible behavior
+  - components
+  - hooks with mocks
+
+## Test Coverage Rules
+If code changes:
+- Test must be added or updated
+
+## Snapshot Rules
+- OK for prompts, error messages, static renders
+- Never snapshot full rendered pages

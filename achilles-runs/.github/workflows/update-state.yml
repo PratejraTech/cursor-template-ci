@@ -1,0 +1,80 @@
+name: Update State and Cursor Intel
+
+on:
+  workflow_dispatch:
+    inputs:
+      subsystem:
+        description: "backend or frontend"
+        required: true
+        type: string
+      phase_id:
+        description: "Phase ID (e.g. backend_phase_1, frontend_phase_1)"
+        required: true
+        type: string
+
+jobs:
+  update-state:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download CI signals artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.subsystem }}-ci-signals
+          path: ci_signals
+
+      - name: Show CI signals
+        run: |
+          echo "CI signals files:"
+          ls -R ci_signals
+          cat ci_signals/ci_signals_${{ inputs.subsystem }}.json || true
+
+      - name: Parse CI signals and update state
+        env:
+          SUBSYSTEM: ${{ inputs.subsystem }}
+          PHASE_ID: ${{ inputs.phase_id }}
+        run: |
+          set -e
+
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+          SIGNAL_FILE="ci_signals/ci_signals_${SUBSYSTEM}.json"
+          if [ ! -f "$SIGNAL_FILE" ]; then
+            echo "Signal file not found: $SIGNAL_FILE"
+            exit 1
+          fi
+
+          # Extract fields using jq (ensure jq is available)
+          sudo apt-get update && sudo apt-get install -y jq
+
+          TESTS_PASSED=$(jq -r '.tests_passed' "$SIGNAL_FILE")
+          WARNINGS=$(jq -r '.warnings' "$SIGNAL_FILE")
+          ERRORS=$(jq -r '.errors' "$SIGNAL_FILE")
+          SUMMARY=$(jq -r '.summary' "$SIGNAL_FILE")
+
+          STATE_FILE="state/backend_state.mdc"
+          if [ "$SUBSYSTEM" = "frontend" ]; then
+            STATE_FILE="state/nextjs_state.mdc"
+          fi
+
+          echo "Updating state file $STATE_FILE for phase $PHASE_ID"
+          echo "Tests_passed=$TESTS_PASSED warnings=$WARNINGS errors=$ERRORS"
+          echo "Summary: $SUMMARY"
+
+          # Call your simplified update_state.py
+          python tools/update_state.py \
+            "$STATE_FILE" "$PHASE_ID" done \
+            --make-current \
+            $( [ "$TESTS_PASSED" = "true" ] && echo "--tests-passed" ) \
+            --warnings "$WARNINGS" \
+            --errors "$ERRORS" \
+            --summary "$SUMMARY"
+
+      - name: Show updated cursor_intel
+        run: |
+          echo "Updated cursor_intel.mdc:"
+          cat state/cursor_intel.mdc || true

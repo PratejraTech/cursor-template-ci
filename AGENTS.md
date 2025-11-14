@@ -42,6 +42,11 @@ If any conflict exists:
 - Architecture docs win over implementation files.
 - `.cursorrules` governs editing behavior and directory-specific rules.
 
+Applied when mentioned manually
+1. **merge.mdc**
+2. **refactor.mdc**
+3. **testing.mdc**
+
 Agents MUST explicitly consult these docs whenever modifying code.
 
 ---

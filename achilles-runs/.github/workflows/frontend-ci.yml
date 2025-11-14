@@ -1,0 +1,105 @@
+name: Frontend CI
+
+on:
+  push:
+    paths:
+      - "dashboard/web/**"
+      - "state/nextjs_state.mdc"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "yarn.lock"
+  pull_request:
+    paths:
+      - "dashboard/web/**"
+      - "state/nextjs_state.mdc"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "yarn.lock"
+  workflow_dispatch: {}
+
+jobs:
+  frontend-test:
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_VERSION: "22"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        working-directory: dashboard/web
+        run: |
+          npm ci
+
+      - name: Run unit tests
+        id: tests
+        working-directory: dashboard/web
+        run: |
+          set -e
+          npm test -- --watch=false
+        continue-on-error: true
+
+      - name: Run lint
+        id: lint
+        working-directory: dashboard/web
+        run: |
+          set -e
+          npm run lint || true
+
+      - name: Collect frontend CI signals
+        id: collect_signals
+        run: |
+          set -e
+
+          TESTS_PASSED=true
+          TESTS_FAILED=0
+          WARNINGS=0
+          ERRORS=0
+
+          if [ "${{ steps.tests.outcome }}" != "success" ]; then
+            TESTS_PASSED=false
+            TESTS_FAILED=1
+            ERRORS=$((ERRORS+1))
+          fi
+
+          if [ "${{ steps.lint.outcome }}" != "success" ]; then
+            WARNINGS=$((WARNINGS+1))
+          fi
+
+          COVERAGE=0.0
+          LINT_WARNINGS=${WARNINGS}
+          TYPING_ERRORS=0
+          BUILD_TIME_SEC=0
+
+          SUMMARY="Frontend CI run completed. Tests_passed=${TESTS_PASSED}, warnings=${WARNINGS}, errors=${ERRORS}."
+
+          mkdir -p ci_artifacts
+          cat > ci_artifacts/ci_signals_frontend.json <<EOF
+          {
+            "subsystem": "frontend",
+            "phase_id": "frontend_phase_1",
+            "tests_passed": ${TESTS_PASSED},
+            "tests_failed": ${TESTS_FAILED},
+            "warnings": ${WARNINGS},
+            "errors": ${ERRORS},
+            "coverage": ${COVERAGE},
+            "lint_warnings": ${LINT_WARNINGS},
+            "typing_errors": ${TYPING_ERRORS},
+            "build_time_sec": ${BUILD_TIME_SEC},
+            "summary": "${SUMMARY}"
+          }
+          EOF
+
+      - name: Upload frontend CI signals artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-ci-signals
+          path: ci_artifacts/ci_signals_frontend.json

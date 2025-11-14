@@ -1,0 +1,21 @@
+---
+alwaysApply: false
+---
+# @refactor-plan
+
+## Philosophy
+- Separate mechanical refactors from behavioral changes
+- Never mix feature changes and refactors in one commit
+- Provide a migration note if public API changes
+
+## Steps
+1. Identify responsibilities
+2. Extract functions/modules
+3. Update imports
+4. Run tests
+5. Validate no behavior changed
+
+## Rules
+- Always propose the refactor structure BEFORE applying it
+- Maintain feature parity
+- Keep diffs small and readable

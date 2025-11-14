@@ -1,0 +1,12 @@
+---
+description: Updated by update_state.py
+alwaysApply: false
+---
+# Achilles Cursor Intelligence Log
+# Simple per-phase record for backend and frontend work.
+# Used by Cursor 2.0 to understand what happened in previous phases.
+
+# Each entry is appended when a phase is moved to status: done
+# by tools/update_state.py
+
+entries: []

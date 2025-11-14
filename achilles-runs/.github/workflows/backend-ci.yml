@@ -1,0 +1,126 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - "achilles_core/**"
+      - "backend/**"
+      - "achilles_processing/**"
+      - "achilles_agent/**"
+      - "state/backend_state.mdc"
+      - "tools/**"
+      - "tests/**"
+  pull_request:
+    paths:
+      - "achilles_core/**"
+      - "backend/**"
+      - "achilles_processing/**"
+      - "achilles_agent/**"
+      - "state/backend_state.mdc"
+      - "tools/**"
+      - "tests/**"
+  workflow_dispatch: {}
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHON_VERSION: "3.11"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # if you have separate backend requirements, install them here too
+
+      - name: Run pytest with coverage
+        id: pytest
+        run: |
+          set -e
+          pytest --maxfail=1 --disable-warnings --cov=achilles_core --cov=backend --cov-report=xml
+        continue-on-error: true
+
+      - name: Run mypy
+        id: mypy
+        run: |
+          set -e
+          mypy achilles_core backend || true
+
+      - name: Run ruff (lint)
+        id: ruff
+        run: |
+          set -e
+          ruff check achilles_core backend || true
+
+      - name: Collect backend CI signals
+        id: collect_signals
+        run: |
+          set -e
+
+          TESTS_PASSED=true
+          TESTS_FAILED=0
+          WARNINGS=0
+          ERRORS=0
+          LINT_WARNINGS=0
+          TYPING_ERRORS=0
+
+          # Interpret pytest result
+          if [ "${{ steps.pytest.outcome }}" != "success" ]; then
+            TESTS_PASSED=false
+            TESTS_FAILED=1
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # For mypy and ruff, we allowed non-zero exit codes; parse logs or just treat as warnings for MVP
+          # You can refine this later to parse specific outputs.
+          # For now we assume any non-success outcome adds warnings.
+          if [ "${{ steps.mypy.outcome }}" != "success" ]; then
+            TYPING_ERRORS=$((TYPING_ERRORS+1))
+            WARNINGS=$((WARNINGS+1))
+          fi
+
+          if [ "${{ steps.ruff.outcome }}" != "success" ]; then
+            LINT_WARNINGS=$((LINT_WARNINGS+1))
+            WARNINGS=$((WARNINGS+1))
+          fi
+
+          # Coverage percentage: parse from coverage.xml if you want real numbers.
+          # For MVP, just set to 0 and refine later.
+          COVERAGE=0.0
+
+          BUILD_TIME_SEC=0
+
+          SUMMARY="Backend CI run completed. Tests_passed=${TESTS_PASSED}, warnings=${WARNINGS}, errors=${ERRORS}."
+
+          mkdir -p ci_artifacts
+          cat > ci_artifacts/ci_signals_backend.json <<EOF
+          {
+            "subsystem": "backend",
+            "phase_id": "backend_phase_1",
+            "tests_passed": ${TESTS_PASSED},
+            "tests_failed": ${TESTS_FAILED},
+            "warnings": ${WARNINGS},
+            "errors": ${ERRORS},
+            "coverage": ${COVERAGE},
+            "lint_warnings": ${LINT_WARNINGS},
+            "typing_errors": ${TYPING_ERRORS},
+            "build_time_sec": ${BUILD_TIME_SEC},
+            "summary": "${SUMMARY}"
+          }
+          EOF
+
+      - name: Upload backend CI signals artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-ci-signals
+          path: ci_artifacts/ci_signals_backend.json

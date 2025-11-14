@@ -1,7 +1,7 @@
 ---
-name: "Python Backend Rules"
-description: "Rules to apply to the backend build
-alwaysApply: true
+name: "Backend Python Rules"
+description: "building the Python backend"
+alwaysApply: false
 ---
 <!-- backend_python.mdc -->
 

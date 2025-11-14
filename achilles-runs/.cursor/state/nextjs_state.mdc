@@ -1,0 +1,22 @@
+---
+description: When building frontend keep track of state
+alwaysApply: false
+---
+# Achilles Next.js dashboard state (MVP)
+# Status values: not_started | in_progress | done | blocked
+
+current_phase: frontend_phase_1
+
+phases:
+  frontend_phase_1:
+    name: "shell_and_routing"
+    status: "not_started"
+  frontend_phase_2:
+    name: "sessions_list"
+    status: "not_started"
+  frontend_phase_3:
+    name: "session_detail_timeline"
+    status: "not_started"
+  frontend_phase_4:
+    name: "agent_performance_and_insights"
+    status: "not_started"
